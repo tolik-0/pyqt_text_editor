@@ -1,5 +1,5 @@
 import sys
-from typing import Dict
+from typing import Dict, Optional
 from PyQt5.QtWidgets import (
     QApplication,
     QMainWindow,
@@ -13,12 +13,56 @@ from PyQt5.QtGui import QIcon
 from PyQt5.QtCore import Qt
 
 
+class TextDocumentModel:
+    """Model that manages the current text document and file path."""
+
+    def __init__(self) -> None:
+        self._file_path: Optional[str] = None
+        self._content: str = ""
+
+    @property
+    def file_path(self) -> Optional[str]:
+        """Return current document path."""
+        return self._file_path
+
+    @file_path.setter
+    def file_path(self, value: Optional[str]) -> None:
+        """Set current document path."""
+        self._file_path = value
+
+    @property
+    def content(self) -> str:
+        """Return current document content."""
+        return self._content
+
+    @content.setter
+    def content(self, value: str) -> None:
+        """Set current document content."""
+        self._content = value
+
+    def load_from_disk(self, path: str) -> str:
+        """Load text content from disk and update model state."""
+        with open(path, "r", encoding="utf-8") as file:
+            self._content = file.read()
+        self._file_path = path
+        return self._content
+
+    def save_to_disk(self, path: Optional[str] = None) -> str:
+        """Save text content to disk and return the path used."""
+        if path is not None:
+            self._file_path = path
+        if self._file_path is None:
+            raise ValueError("File path is not set.")
+        with open(self._file_path, "w", encoding="utf-8") as file:
+            file.write(self._content)
+        return self._file_path
+
+
 class TextEditorMainWindow(QMainWindow):
     """Main window that provides the text editor user interface."""
 
     def __init__(self) -> None:
         super().__init__()
-        self._file_path: str | None = None
         self._setup_ui()
 
     def _setup_ui(self) -> None:
@@ -45,65 +89,54 @@ class TextEditorMainWindow(QMainWindow):
         new_action = QAction(QIcon(), "New", self)
         new_action.setShortcut("Ctrl+N")
         new_action.setStatusTip("Create a new document")
-        new_action.triggered.connect(self.on_new_file)
         self.actions["new"] = new_action
 
         open_action = QAction(QIcon(), "Open...", self)
         open_action.setShortcut("Ctrl+O")
         open_action.setStatusTip("Open an existing text file")
-        open_action.triggered.connect(self.on_open_file)
         self.actions["open"] = open_action
 
         save_action = QAction(QIcon(), "Save", self)
         save_action.setShortcut("Ctrl+S")
         save_action.setStatusTip("Save the current document")
-        save_action.triggered.connect(self.on_save_file)
         self.actions["save"] = save_action
 
         save_as_action = QAction(QIcon(), "Save As...", self)
         save_as_action.setStatusTip("Save the current document under a new name")
-        save_as_action.triggered.connect(self.on_save_file_as)
         self.actions["save_as"] = save_as_action
 
         exit_action = QAction(QIcon(), "Exit", self)
         exit_action.setShortcut("Ctrl+Q")
         exit_action.setStatusTip("Exit the application")
-        exit_action.triggered.connect(self.close)
         self.actions["exit"] = exit_action
 
         undo_action = QAction(QIcon(), "Undo", self)
         undo_action.setShortcut("Ctrl+Z")
         undo_action.setStatusTip("Undo last action")
-        undo_action.triggered.connect(self.text_edit.undo)
         self.actions["undo"] = undo_action
 
         redo_action = QAction(QIcon(), "Redo", self)
         redo_action.setShortcut("Ctrl+Y")
         redo_action.setStatusTip("Redo last undone action")
-        redo_action.triggered.connect(self.text_edit.redo)
         self.actions["redo"] = redo_action
 
         cut_action = QAction(QIcon(), "Cut", self)
         cut_action.setShortcut("Ctrl+X")
         cut_action.setStatusTip("Cut selection to clipboard")
-        cut_action.triggered.connect(self.text_edit.cut)
         self.actions["cut"] = cut_action
 
         copy_action = QAction(QIcon(), "Copy", self)
         copy_action.setShortcut("Ctrl+C")
         copy_action.setStatusTip("Copy selection to clipboard")
-        copy_action.triggered.connect(self.text_edit.copy)
         self.actions["copy"] = copy_action
 
         paste_action = QAction(QIcon(), "Paste", self)
         paste_action.setShortcut("Ctrl+V")
         paste_action.setStatusTip("Paste text from clipboard")
-        paste_action.triggered.connect(self.text_edit.paste)
         self.actions["paste"] = paste_action
 
         about_action = QAction("About", self)
         about_action.setStatusTip("Show information about this application")
-        about_action.triggered.connect(self.on_about)
         self.actions["about"] = about_action
 
     def _create_menus(self) -> None:
@@ -132,7 +165,6 @@ class TextEditorMainWindow(QMainWindow):
     def _create_toolbars(self) -> None:
         """Create toolbars with frequently used actions."""
         file_toolbar = QToolBar("File", self)
-        file_toolbar.setIconSize(Qt.QSize(16, 16)) if hasattr(Qt, "QSize") else None
         self.addToolBar(file_toolbar)
         file_toolbar.addAction(self.actions["new"])
         file_toolbar.addAction(self.actions["open"])
@@ -147,16 +179,43 @@ class TextEditorMainWindow(QMainWindow):
         edit_toolbar.addAction(self.actions["copy"])
         edit_toolbar.addAction(self.actions["paste"])
 
-    def on_new_file(self) -> None:
-        """Clear the editor and reset file path."""
-        self._file_path = None
-        self.text_edit.clear()
-        self.statusBar().showMessage("New document", 2000)
 
-    def on_open_file(self) -> None:
-        """Open a text file from disk and load its contents."""
+class TextEditorController:
+    """Controller that connects the model and the main window."""
+
+    def __init__(self, model: TextDocumentModel, view: TextEditorMainWindow) -> None:
+        self._model = model
+        self._view = view
+        self._connect_signals()
+
+    def _connect_signals(self) -> None:
+        """Connect signals of actions to controller methods."""
+        self._view.actions["new"].triggered.connect(self.new_file)
+        self._view.actions["open"].triggered.connect(self.open_file)
+        self._view.actions["save"].triggered.connect(self.save_file)
+        self._view.actions["save_as"].triggered.connect(self.save_file_as)
+        self._view.actions["exit"].triggered.connect(self._view.close)
+
+        self._view.actions["undo"].triggered.connect(self._view.text_edit.undo)
+        self._view.actions["redo"].triggered.connect(self._view.text_edit.redo)
+        self._view.actions["cut"].triggered.connect(self._view.text_edit.cut)
+        self._view.actions["copy"].triggered.connect(self._view.text_edit.copy)
+        self._view.actions["paste"].triggered.connect(self._view.text_edit.paste)
+
+        self._view.actions["about"].triggered.connect(self.show_about)
+
+    def new_file(self) -> None:
+        """Clear the editor and reset model state."""
+        self._model.file_path = None
+        self._model.content = ""
+        self._view.text_edit.clear()
+        self._view.statusBar().showMessage("New document", 2000)
+        self._view.setWindowTitle("PyQt Text Editor")
+
+    def open_file(self) -> None:
+        """Open a text file from disk using the model."""
         path, _ = QFileDialog.getOpenFileName(
-            self,
+            self._view,
             "Open File",
             "",
             "Text Files (*.txt);;All Files (*)",
@@ -164,62 +223,62 @@ class TextEditorMainWindow(QMainWindow):
         if not path:
             return
         try:
-            with open(path, "r", encoding="utf-8") as file:
-                content = file.read()
+            content = self._model.load_from_disk(path)
         except OSError as error:
-            QMessageBox.critical(self, "Open File", f"Could not open file:\n{error}")
+            QMessageBox.critical(self._view, "Open File", f"Could not open file:\n{error}")
             return
-        self._file_path = path
-        self.text_edit.setPlainText(content)
-        self.statusBar().showMessage(f"Opened: {path}", 2000)
-        self.setWindowTitle(f"PyQt Text Editor - {path}")
+        self._view.text_edit.setPlainText(content)
+        self._view.statusBar().showMessage(f"Opened: {path}", 2000)
+        self._view.setWindowTitle(f"PyQt Text Editor - {path}")
 
-    def on_save_file(self) -> None:
-        """Save the current document to disk."""
-        if self._file_path is None:
-            self.on_save_file_as()
+    def save_file(self) -> None:
+        """Save the current document using the model."""
+        if self._model.file_path is None:
+            self.save_file_as()
             return
-        self._write_to_path(self._file_path)
+        self._model.content = self._view.text_edit.toPlainText()
+        try:
+            path = self._model.save_to_disk()
+        except (OSError, ValueError) as error:
+            QMessageBox.critical(self._view, "Save File", f"Could not save file:\n{error}")
+            return
+        self._view.statusBar().showMessage(f"Saved: {path}", 2000)
 
-    def on_save_file_as(self) -> None:
-        """Ask for a file path and save the current document."""
+    def save_file_as(self) -> None:
+        """Ask for a file path and save the current document using the model."""
         path, _ = QFileDialog.getSaveFileName(
-            self,
+            self._view,
             "Save File As",
             "",
             "Text Files (*.txt);;All Files (*)",
         )
         if not path:
             return
-        self._write_to_path(path)
-        self._file_path = path
-        self.setWindowTitle(f"PyQt Text Editor - {path}")
-
-    def _write_to_path(self, path: str) -> None:
-        """Write editor contents to the given file path."""
+        self._model.content = self._view.text_edit.toPlainText()
         try:
-            content = self.text_edit.toPlainText()
-            with open(path, "w", encoding="utf-8") as file:
-                file.write(content)
+            used_path = self._model.save_to_disk(path)
         except OSError as error:
-            QMessageBox.critical(self, "Save File", f"Could not save file:\n{error}")
+            QMessageBox.critical(self._view, "Save File", f"Could not save file:\n{error}")
             return
-        self.statusBar().showMessage(f"Saved: {path}", 2000)
+        self._view.statusBar().showMessage(f"Saved: {used_path}", 2000)
+        self._view.setWindowTitle(f"PyQt Text Editor - {used_path}")
 
-    def on_about(self) -> None:
+    def show_about(self) -> None:
         """Show simple About dialog."""
         QMessageBox.information(
-            self,
+            self._view,
             "About",
-            "PyQt Text Editor\n\nSimple example of menus, toolbars and status bar.",
+            "PyQt Text Editor\n\nExample of MVC-style PyQt application with menus and toolbars.",
         )
 
 
 def main() -> None:
     """Entry point of the text editor application."""
     app = QApplication(sys.argv)
-    window = TextEditorMainWindow()
-    window.show()
+    model = TextDocumentModel()
+    view = TextEditorMainWindow()
+    controller = TextEditorController(model, view)
+    view.show()
     sys.exit(app.exec_())
 
 
